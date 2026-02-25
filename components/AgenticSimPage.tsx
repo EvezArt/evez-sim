@@ -2,10 +2,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 
-// EVEZ-OS Agentic Operating Surface
-// Entities ARE circuits. FireBody=active, PrimeVoid=blocker, TopoSpider=probe
-// Fetches /api/bus-state every 30s. User watches. AI pilots.
-
 const P = { bg:0x000a03, green:0x00ff41, green2:0x00cc33, green3:0x005518, fire:0xff6600, fire2:0xff2200, white:0xe8ffe8, dim:0x003311, cyan:0x00ffff, yellow:0xffaa00, red:0xff2200 }
 
 function buildMesh(c: any, scene: THREE.Scene): THREE.Object3D {
@@ -36,22 +32,90 @@ function placeCircuit(c: any, idx: number, total: number): [number,number,number
   return [Math.cos(angle)*(8+idx*0.5), 5+Math.cos(angle)*2, Math.sin(angle)*(8+idx*0.5)]
 }
 
+// ── Payment Gate ─────────────────────────────────────────────────────────────
+function PaymentGate({ onEnter }: { onEnter: () => void }) {
+  const [loading, setLoading] = useState(false)
+  const [demo, setDemo] = useState(false)
+  
+  useEffect(() => {
+    // Check if Stripe is configured
+    fetch('/api/checkout').then(r => r.json()).then((d: any) => {
+      if (!d.configured) setDemo(true)
+    }).catch(() => setDemo(true))
+  }, [])
+
+  const handlePay = async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin })
+      })
+      const d = await r.json() as { url?: string; demo?: boolean }
+      if (d.demo || !d.url) { onEnter(); return }
+      window.location.href = d.url
+    } catch { setLoading(false) }
+  }
+
+  const s = {
+    overlay: { position:'fixed' as const, inset:0, background:'rgba(0,10,3,0.97)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:100, fontFamily:'monospace' },
+    box: { border:'1px solid #003311', padding:'32px 40px', maxWidth:400, textAlign:'center' as const },
+    title: { color:'#00ff41', fontSize:18, fontWeight:'bold', marginBottom:8 },
+    sub: { color:'#e8ffe8', fontSize:11, marginBottom:4, lineHeight:1.6 },
+    dim: { color:'#003311', fontSize:10, marginBottom:24 },
+    btn: { background:'#00ff41', color:'#000a03', border:'none', padding:'12px 32px', fontSize:13, fontWeight:'bold', cursor:'pointer', fontFamily:'monospace', width:'100%', marginBottom:8 },
+    skip: { color:'#003311', fontSize:10, cursor:'pointer', textDecoration:'underline' as const, background:'none', border:'none', fontFamily:'monospace' }
+  }
+
+  return (
+    <div style={s.overlay}>
+      <div style={s.box}>
+        <div style={s.title}>EVEZ-OS AGENT FIELD</div>
+        <div style={s.sub}>Live circuit physics. These are real AI processes.</div>
+        <div style={s.sub}>FireBody = active circuit. PrimeVoid = blocker. TopoSpider = probe.</div>
+        <div style={s.dim}>Updates every 30s from the hyperloop.</div>
+        {demo ? (
+          <button style={s.btn} onClick={onEnter}>ENTER (DEMO MODE)</button>
+        ) : (
+          <button style={s.btn} onClick={handlePay} disabled={loading}>
+            {loading ? 'REDIRECTING...' : 'ENTER — $5 ONE TIME'}
+          </button>
+        )}
+        <div/>
+        <button style={s.skip} onClick={onEnter}>skip for now →</button>
+      </div>
+    </div>
+  )
+}
+
 export default function AgenticSimPage() {
   const mountRef=useRef<HTMLDivElement>(null)
   const stateRef=useRef<any>(null)
   const frameRef=useRef(0)
   const [busState,setBusState]=useState<any>(null)
   const [mobile,setMobile]=useState(false)
+  const [gated,setGated]=useState(true)
+
+  // Check URL param ?paid=1 (Stripe redirect back)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const p = new URLSearchParams(window.location.search)
+      if (p.get('paid') === '1') setGated(false)
+    }
+  }, [])
 
   const fetchBus=useCallback(async()=>{
     try{const r=await fetch('/api/bus-state');const d=await r.json();stateRef.current=d;setBusState(d)}catch{}
   },[])
 
-  useEffect(()=>{fetchBus();const iv=setInterval(fetchBus,30000);return()=>clearInterval(iv)},[fetchBus])
+  useEffect(()=>{if(!gated){fetchBus();const iv=setInterval(fetchBus,30000);return()=>clearInterval(iv)}},[fetchBus,gated])
 
   useEffect(()=>{
+    if(gated) return
     const isMobile=window.innerWidth<768; setMobile(isMobile)
     const el=mountRef.current!
+    if(!el) return
     const scene=new THREE.Scene(); scene.background=new THREE.Color(P.bg); scene.fog=new THREE.FogExp2(P.bg,0.011)
     const camera=new THREE.PerspectiveCamera(isMobile?70:58,el.clientWidth/el.clientHeight,0.1,400)
     camera.position.set(22,14,32); camera.lookAt(0,2,0)
@@ -68,7 +132,6 @@ export default function AgenticSimPage() {
     let circuits: any[]=[]
 
     function rebuild(entities: any[]){
-      // Use Array.from for ES5 compat
       Array.from(meshMap.values()).forEach(m=>scene.remove(m))
       meshMap=new Map(); phases=new Map(); circuits=entities
       entities.forEach((c,i)=>{
@@ -112,39 +175,44 @@ export default function AgenticSimPage() {
     animate()
     const onResize=()=>{camera.aspect=el.clientWidth/el.clientHeight;camera.updateProjectionMatrix();renderer.setSize(el.clientWidth,el.clientHeight)}
     window.addEventListener('resize',onResize)
-    return()=>{ clearInterval(initIv); cancelAnimationFrame(frameRef.current); window.removeEventListener('resize',onResize); renderer.dispose(); el.removeChild(renderer.domElement) }
-  },[])
+    return()=>{ clearInterval(initIv); cancelAnimationFrame(frameRef.current); window.removeEventListener('resize',onResize); renderer.dispose(); if(el.contains(renderer.domElement))el.removeChild(renderer.domElement) }
+  },[gated])
 
   const hc: Record<string,string>={'GREEN':'#00ff41','YELLOW':'#ffaa00','RED':'#ff2200'}
   return (
     <div style={{position:'relative',width:'100%',height:'100dvh',background:'#000a03',overflow:'hidden'}}>
+      {gated && <PaymentGate onEnter={()=>setGated(false)} />}
       <div ref={mountRef} style={{width:'100%',height:'100%'}} />
-      <div style={{position:'absolute',top:0,left:0,right:0,background:'rgba(0,10,3,0.92)',borderBottom:'1px solid #003311',padding:'6px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',fontFamily:'monospace',zIndex:20,flexWrap:'wrap' as const,gap:4}}>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <span style={{color:'#00ff41',fontWeight:'bold',fontSize:12}}>EVEZ-OS</span>
-          <span style={{color:'#003311',fontSize:10}}>agentic operating surface</span>
-        </div>
-        <div style={{display:'flex',gap:10,fontSize:10,color:'#e8ffe8',alignItems:'center'}}>
-          <span style={{color:hc[busState?.circuit_health??'GREEN']}}>{busState?.circuit_health??'\u2026'}</span>
-          <span>R{busState?.current_round??189}</span>
-          <span>V={busState?.V_global?.toFixed(4)??'7.2400'}</span>
-          <span style={{color:'#ff6600'}}>{busState?.fires??7} fire</span>
-          <span style={{color:'#ff2200'}}>{busState?.voids??4} void</span>
-          <span style={{color:'#00ffff'}}>{busState?.spiders??3} probe</span>
-        </div>
-        <span style={{color:'#003311',fontSize:9}}>@EVEZ666</span>
-      </div>
-      <div style={{position:'absolute',...(mobile?{bottom:0,left:0,right:0,borderTop:'1px solid #003311' as const}:{bottom:20,left:12,border:'1px solid #003311',borderRadius:4,width:240}),background:'rgba(0,10,3,0.90)',padding:'7px 12px',fontFamily:'monospace',fontSize:9,zIndex:20}}>
-        <div style={{display:'flex',gap:mobile?14:0,flexDirection:mobile?'row' as const:'column' as const,flexWrap:'wrap' as const,justifyContent:mobile?'center' as const:'flex-start' as const}}>
-          {[{color:'#ff6600',label:`FireBody \u00d7${busState?.fires??7} \u2014 active circuits`},{color:'#ff2200',label:`PrimeVoid \u00d7${busState?.voids??4} \u2014 blockers`},{color:'#00ffff',label:`TopoSpider \u00d7${busState?.spiders??3} \u2014 probes`}].map(({color,label})=>(
-            <div key={label} style={{display:'flex',alignItems:'center',gap:5,marginBottom:mobile?0:3}}>
-              <div style={{width:7,height:7,borderRadius:'50%',background:color,flexShrink:0}} />
-              <span style={{color:'#e8ffe8'}}>{label}</span>
+      {!gated && (
+        <>
+          <div style={{position:'absolute',top:0,left:0,right:0,background:'rgba(0,10,3,0.92)',borderBottom:'1px solid #003311',padding:'6px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',fontFamily:'monospace',zIndex:20,flexWrap:'wrap' as const,gap:4}}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{color:'#00ff41',fontWeight:'bold',fontSize:12}}>EVEZ-OS</span>
+              <span style={{color:'#003311',fontSize:10}}>agentic operating surface</span>
             </div>
-          ))}
-        </div>
-        {!mobile&&<div style={{marginTop:5,color:'#003311',borderTop:'1px solid #001a08',paddingTop:4}}>30s live \u00b7 /api/bus-state \u00b7 spine append-only</div>}
-      </div>
+            <div style={{display:'flex',gap:10,fontSize:10,color:'#e8ffe8',alignItems:'center'}}>
+              <span style={{color:hc[busState?.circuit_health??'GREEN']}}>{busState?.circuit_health??'…'}</span>
+              <span>R{busState?.current_round??189}</span>
+              <span>V={busState?.V_global?.toFixed(4)??'7.2400'}</span>
+              <span style={{color:'#ff6600'}}>{busState?.fires??7} fire</span>
+              <span style={{color:'#ff2200'}}>{busState?.voids??4} void</span>
+              <span style={{color:'#00ffff'}}>{busState?.spiders??3} probe</span>
+            </div>
+            <span style={{color:'#003311',fontSize:9}}>@EVEZ666</span>
+          </div>
+          <div style={{position:'absolute',...(mobile?{bottom:0,left:0,right:0,borderTop:'1px solid #003311' as const}:{bottom:20,left:12,border:'1px solid #003311',borderRadius:4,width:240}),background:'rgba(0,10,3,0.90)',padding:'7px 12px',fontFamily:'monospace',fontSize:9,zIndex:20}}>
+            <div style={{display:'flex',gap:mobile?14:0,flexDirection:mobile?'row' as const:'column' as const,flexWrap:'wrap' as const,justifyContent:mobile?'center' as const:'flex-start' as const}}>
+              {[{color:'#ff6600',label:`FireBody ×${busState?.fires??7} — active circuits`},{color:'#ff2200',label:`PrimeVoid ×${busState?.voids??4} — blockers`},{color:'#00ffff',label:`TopoSpider ×${busState?.spiders??3} — probes`}].map(({color,label})=>(
+                <div key={label} style={{display:'flex',alignItems:'center',gap:5,marginBottom:mobile?0:3}}>
+                  <div style={{width:7,height:7,borderRadius:'50%',background:color,flexShrink:0}} />
+                  <span style={{color:'#e8ffe8'}}>{label}</span>
+                </div>
+              ))}
+            </div>
+            {!mobile&&<div style={{marginTop:5,color:'#003311',borderTop:'1px solid #001a08',paddingTop:4}}>30s live · /api/bus-state · spine append-only</div>}
+          </div>
+        </>
+      )}
     </div>
   )
 }
