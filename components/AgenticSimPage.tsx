@@ -8,8 +8,8 @@ import * as THREE from 'three'
 
 const P = { bg:0x000a03, green:0x00ff41, green2:0x00cc33, green3:0x005518, fire:0xff6600, fire2:0xff2200, white:0xe8ffe8, dim:0x003311, cyan:0x00ffff, yellow:0xffaa00, red:0xff2200 }
 
-function buildMesh(c, scene) {
-  let m
+function buildMesh(c: any, scene: THREE.Scene): THREE.Object3D {
+  let m: THREE.Object3D
   if (c.type==='fire_body') {
     const r=(c.poly_c??0.55)*2.0; const g=new THREE.Group()
     g.add(new THREE.Mesh(new THREE.SphereGeometry(r*0.5,14,10),new THREE.MeshBasicMaterial({color:P.fire})))
@@ -29,7 +29,7 @@ function buildMesh(c, scene) {
   scene.add(m); return m
 }
 
-function placeCircuit(c, idx, total) {
+function placeCircuit(c: any, idx: number, total: number): [number,number,number] {
   const angle=(idx/total)*Math.PI*2
   if(c.type==='fire_body')   return [Math.cos(angle)*(3+idx*0.9), 2+Math.sin(angle*3)*3, Math.sin(angle)*(3+idx*0.9)]
   if(c.type==='prime_void')  return [Math.cos(angle)*(13+(c.N??89)*0.05), -3+Math.cos(angle*2)*2, Math.sin(angle)*(13+(c.N??89)*0.05)]
@@ -37,9 +37,10 @@ function placeCircuit(c, idx, total) {
 }
 
 export default function AgenticSimPage() {
-  const mountRef=useRef(null), stateRef=useRef(null), frameRef=useRef(0)
-  const [busState,setBusState]=useState(null)
-  const [selected,setSelected]=useState(null)
+  const mountRef=useRef<HTMLDivElement>(null)
+  const stateRef=useRef<any>(null)
+  const frameRef=useRef(0)
+  const [busState,setBusState]=useState<any>(null)
   const [mobile,setMobile]=useState(false)
 
   const fetchBus=useCallback(async()=>{
@@ -50,7 +51,7 @@ export default function AgenticSimPage() {
 
   useEffect(()=>{
     const isMobile=window.innerWidth<768; setMobile(isMobile)
-    const el=mountRef.current
+    const el=mountRef.current!
     const scene=new THREE.Scene(); scene.background=new THREE.Color(P.bg); scene.fog=new THREE.FogExp2(P.bg,0.011)
     const camera=new THREE.PerspectiveCamera(isMobile?70:58,el.clientWidth/el.clientHeight,0.1,400)
     camera.position.set(22,14,32); camera.lookAt(0,2,0)
@@ -59,32 +60,41 @@ export default function AgenticSimPage() {
     el.appendChild(renderer.domElement)
     scene.add(new THREE.AmbientLight(0x00ff41,0.2))
     const firePt=new THREE.PointLight(P.fire,3,30); scene.add(firePt)
-    const grid=new THREE.GridHelper(60,20,P.green3,P.dim); grid.position.y=-4; grid.material.transparent=true; grid.material.opacity=0.10; scene.add(grid)
-    let meshMap=new Map(),phases=new Map(),circuits=[]
-    function rebuild(entities){
-      for(const[,m]of meshMap)scene.remove(m); meshMap=new Map(); phases=new Map(); circuits=entities
+    const grid=new THREE.GridHelper(60,20,P.green3,P.dim); grid.position.y=-4;
+    (grid.material as THREE.Material).transparent=true;(grid.material as THREE.Material).opacity=0.10; scene.add(grid)
+
+    let meshMap=new Map<string,THREE.Object3D>()
+    let phases=new Map<string,number>()
+    let circuits: any[]=[]
+
+    function rebuild(entities: any[]){
+      // Use Array.from for ES5 compat
+      Array.from(meshMap.values()).forEach(m=>scene.remove(m))
+      meshMap=new Map(); phases=new Map(); circuits=entities
       entities.forEach((c,i)=>{
         const m=buildMesh(c,scene); const pos=placeCircuit(c,i,entities.length)
         m.position.set(...pos); meshMap.set(c.id,m); phases.set(c.id,Math.random()*Math.PI*2)
       })
     }
+
     const initIv=setInterval(()=>{ if(stateRef.current){clearInterval(initIv);rebuild(stateRef.current.entities)} },100)
     const linePts=new Float32Array(600); const lineGeo=new THREE.BufferGeometry()
     lineGeo.setAttribute('position',new THREE.BufferAttribute(linePts,3))
     scene.add(new THREE.LineSegments(lineGeo,new THREE.LineBasicMaterial({color:P.green3,transparent:true,opacity:0.12})))
     let camTheta=0,lastRebuild=0
+
     function animate(){
       frameRef.current=requestAnimationFrame(animate); const dt=1/60; const now=Date.now()
       if(stateRef.current&&now-lastRebuild>30000){rebuild(stateRef.current.entities);lastRebuild=now}
-      let fc=new THREE.Vector3(0,2,0),fcount=0
-      for(const c of circuits){
-        const m=meshMap.get(c.id); if(!m)continue
+      const fc=new THREE.Vector3(0,2,0); let fcount=0
+      circuits.forEach(c=>{
+        const m=meshMap.get(c.id); if(!m)return
         const ph=(phases.get(c.id)??0)+dt*(c.type==='fire_body'?0.8:c.type==='topo_spider'?1.2:0.15); phases.set(c.id,ph)
         const pulse=0.5+0.5*Math.sin(ph)
         if(c.type==='fire_body'){m.scale.setScalar(0.92+0.08*pulse);fc.add(m.position);fcount++;m.rotation.y+=dt*0.3}
         else if(c.type==='topo_spider'){m.rotation.y+=dt*0.9;m.rotation.x+=dt*0.3;m.position.x+=(fc.x/Math.max(fcount,1)-m.position.x)*dt*0.08;m.position.z+=(fc.z/Math.max(fcount,1)-m.position.z)*dt*0.08}
-        else{m.rotation.z+=dt*0.06;const ch=m.children;if(ch[1])ch[1].scale.setScalar(1+0.15*pulse)}
-      }
+        else{m.rotation.z+=dt*0.06;const ch=(m as THREE.Group).children;if(ch[1])ch[1].scale.setScalar(1+0.15*pulse)}
+      })
       if(fcount>0){fc.divideScalar(fcount);firePt.position.copy(fc)}
       let ptr=0,ec=0
       for(let i=0;i<circuits.length&&ec<100;i++)for(let j=i+1;j<circuits.length&&ec<100;j++){
@@ -105,18 +115,18 @@ export default function AgenticSimPage() {
     return()=>{ clearInterval(initIv); cancelAnimationFrame(frameRef.current); window.removeEventListener('resize',onResize); renderer.dispose(); el.removeChild(renderer.domElement) }
   },[])
 
-  const hc={'GREEN':'#00ff41','YELLOW':'#ffaa00','RED':'#ff2200'}
+  const hc: Record<string,string>={'GREEN':'#00ff41','YELLOW':'#ffaa00','RED':'#ff2200'}
   return (
     <div style={{position:'relative',width:'100%',height:'100dvh',background:'#000a03',overflow:'hidden'}}>
       <div ref={mountRef} style={{width:'100%',height:'100%'}} />
-      <div style={{position:'absolute',top:0,left:0,right:0,background:'rgba(0,10,3,0.92)',borderBottom:'1px solid #003311',padding:'6px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',fontFamily:'monospace',zIndex:20,flexWrap:'wrap',gap:4}}>
+      <div style={{position:'absolute',top:0,left:0,right:0,background:'rgba(0,10,3,0.92)',borderBottom:'1px solid #003311',padding:'6px 14px',display:'flex',justifyContent:'space-between',alignItems:'center',fontFamily:'monospace',zIndex:20,flexWrap:'wrap' as const,gap:4}}>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
           <span style={{color:'#00ff41',fontWeight:'bold',fontSize:12}}>EVEZ-OS</span>
           <span style={{color:'#003311',fontSize:10}}>agentic operating surface</span>
         </div>
         <div style={{display:'flex',gap:10,fontSize:10,color:'#e8ffe8',alignItems:'center'}}>
-          <span style={{color:hc[busState?.circuit_health??'GREEN']}}>\u25cf {busState?.circuit_health??'\u2026'}</span>
-          <span>R{busState?.current_round??188}</span>
+          <span style={{color:hc[busState?.circuit_health??'GREEN']}}>{busState?.circuit_health??'\u2026'}</span>
+          <span>R{busState?.current_round??189}</span>
           <span>V={busState?.V_global?.toFixed(4)??'7.2400'}</span>
           <span style={{color:'#ff6600'}}>{busState?.fires??7} fire</span>
           <span style={{color:'#ff2200'}}>{busState?.voids??4} void</span>
@@ -124,16 +134,8 @@ export default function AgenticSimPage() {
         </div>
         <span style={{color:'#003311',fontSize:9}}>@EVEZ666</span>
       </div>
-      {selected&&(
-        <div style={{position:'absolute',top:38,right:0,width:mobile?'100%':280,background:'rgba(0,10,3,0.94)',borderLeft:mobile?'none':'1px solid #003311',borderBottom:'1px solid #003311',padding:'10px 14px',fontFamily:'monospace',fontSize:10,zIndex:20}}>
-          <div style={{color:selected.type==='fire_body'?'#ff6600':selected.type==='prime_void'?'#ff2200':'#00ffff',fontWeight:'bold',marginBottom:4}}>{selected.label}</div>
-          <div style={{color:'#e8ffe8',lineHeight:1.7}}>{selected.description}</div>
-          <div style={{color:'#003311',marginTop:6}}>layer: {selected.layer??'\u2014'} \u00b7 truth: {selected.truth_state}</div>
-          <button onClick={()=>setSelected(null)} style={{background:'none',border:'none',color:'#003311',cursor:'pointer',fontSize:9,marginTop:4,fontFamily:'monospace'}}>[close]</button>
-        </div>
-      )}
-      <div style={{position:'absolute',...(mobile?{bottom:0,left:0,right:0,borderTop:'1px solid #003311'}:{bottom:20,left:12,border:'1px solid #003311',borderRadius:4,width:240}),background:'rgba(0,10,3,0.90)',padding:'7px 12px',fontFamily:'monospace',fontSize:9,zIndex:20}}>
-        <div style={{display:'flex',gap:mobile?14:0,flexDirection:mobile?'row':'column',flexWrap:'wrap',justifyContent:mobile?'center':'flex-start'}}>
+      <div style={{position:'absolute',...(mobile?{bottom:0,left:0,right:0,borderTop:'1px solid #003311' as const}:{bottom:20,left:12,border:'1px solid #003311',borderRadius:4,width:240}),background:'rgba(0,10,3,0.90)',padding:'7px 12px',fontFamily:'monospace',fontSize:9,zIndex:20}}>
+        <div style={{display:'flex',gap:mobile?14:0,flexDirection:mobile?'row' as const:'column' as const,flexWrap:'wrap' as const,justifyContent:mobile?'center' as const:'flex-start' as const}}>
           {[{color:'#ff6600',label:`FireBody \u00d7${busState?.fires??7} \u2014 active circuits`},{color:'#ff2200',label:`PrimeVoid \u00d7${busState?.voids??4} \u2014 blockers`},{color:'#00ffff',label:`TopoSpider \u00d7${busState?.spiders??3} \u2014 probes`}].map(({color,label})=>(
             <div key={label} style={{display:'flex',alignItems:'center',gap:5,marginBottom:mobile?0:3}}>
               <div style={{width:7,height:7,borderRadius:'50%',background:color,flexShrink:0}} />
@@ -141,7 +143,7 @@ export default function AgenticSimPage() {
             </div>
           ))}
         </div>
-        {!mobile&&<div style={{marginTop:5,color:'#003311',borderTop:'1px solid #001a08',paddingTop:4}}>30s live refresh \u00b7 /api/bus-state \u00b7 spine append-only</div>}
+        {!mobile&&<div style={{marginTop:5,color:'#003311',borderTop:'1px solid #001a08',paddingTop:4}}>30s live \u00b7 /api/bus-state \u00b7 spine append-only</div>}
       </div>
     </div>
   )
